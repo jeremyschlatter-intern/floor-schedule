@@ -1,8 +1,10 @@
 """
 Data fetchers for congressional schedule sources.
-Pulls from House floor XML, Senate hearings XML, and Congress.gov API.
+Pulls from House floor XML, Senate hearings XML, Senate floor schedule,
+and Congress.gov API.
 """
 
+import os
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime, date, timedelta
@@ -12,10 +14,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import re
 import logging
+import pytz
 
 logger = logging.getLogger(__name__)
 
-CONGRESS_API_KEY = "CONGRESS_API_KEY"
+CONGRESS_API_KEY = os.environ.get(
+    "CONGRESS_API_KEY", "CONGRESS_API_KEY"
+)
+ET_TZ = pytz.timezone("America/New_York")
 
 
 @dataclass
@@ -23,7 +29,7 @@ class ScheduleEvent:
     """Unified event representation for any congressional schedule item."""
     title: str
     date: date
-    time: Optional[str]  # e.g. "10:00 AM" or None for all-day
+    time: Optional[str]  # e.g. "10:00 AM" or None for TBD
     chamber: str  # "House" or "Senate"
     event_type: str  # "floor", "hearing", "markup", "meeting"
     committee: Optional[str] = None
@@ -37,8 +43,8 @@ class ScheduleEvent:
 
     @property
     def sort_key(self):
-        """Sort by date, then time (all-day first), then chamber."""
-        time_sort = self.time or "00:00"
+        """Sort by date, then time (TBD items last within a day), then chamber."""
+        time_sort = self.time or "99:99"
         try:
             t = datetime.strptime(time_sort.strip(), "%I:%M %p")
             time_sort = t.strftime("%H:%M")
@@ -75,16 +81,67 @@ class ScheduleEvent:
         }
 
 
-def get_current_week_monday():
-    """Get the Monday of the current week."""
+# Source status tracking
+_source_status = {}
+
+
+def get_source_status() -> dict:
+    """Return status of each data source (ok/error/count)."""
+    return dict(_source_status)
+
+
+def _mark_source(name: str, ok: bool, count: int = 0, error: str = ""):
+    _source_status[name] = {"ok": ok, "count": count, "error": error}
+
+
+def get_current_week_monday(offset_weeks: int = 0):
+    """Get the Monday of the current (or offset) week."""
     today = date.today()
-    return today - timedelta(days=today.weekday())
+    monday = today - timedelta(days=today.weekday())
+    return monday + timedelta(weeks=offset_weeks)
 
 
-def fetch_house_floor_xml() -> list[ScheduleEvent]:
+def _utc_to_et(utc_dt: datetime) -> datetime:
+    """Convert a UTC datetime to Eastern Time properly (handles EST/EDT)."""
+    if utc_dt.tzinfo is None:
+        utc_dt = pytz.utc.localize(utc_dt)
+    return utc_dt.astimezone(ET_TZ)
+
+
+def _format_et_time(utc_dt: datetime) -> Optional[str]:
+    """Convert UTC datetime to Eastern time string like '10:00 AM'."""
+    et_dt = _utc_to_et(utc_dt)
+    if et_dt.hour == 0 and et_dt.minute == 0:
+        return None  # Midnight likely means time not set
+    return et_dt.strftime("%-I:%M %p")
+
+
+def _bill_url(bill_id: str) -> str:
+    """Generate a Congress.gov URL for a bill identifier."""
+    bill_id = bill_id.strip()
+    # Parse the bill type and number
+    patterns = [
+        (r"H\.?\s*Res\.?\s*(\d+)", "house-resolution"),
+        (r"H\.?\s*J\.?\s*Res\.?\s*(\d+)", "house-joint-resolution"),
+        (r"H\.?\s*Con\.?\s*Res\.?\s*(\d+)", "house-concurrent-resolution"),
+        (r"S\.?\s*Res\.?\s*(\d+)", "senate-resolution"),
+        (r"S\.?\s*J\.?\s*Res\.?\s*(\d+)", "senate-joint-resolution"),
+        (r"S\.?\s*Con\.?\s*Res\.?\s*(\d+)", "senate-concurrent-resolution"),
+        (r"H\.?\s*R\.?\s*(\d+)", "house-bill"),
+        (r"S\.?\s*(\d+)", "senate-bill"),
+    ]
+    for pattern, bill_type in patterns:
+        m = re.match(pattern, bill_id, re.IGNORECASE)
+        if m:
+            num = m.group(1)
+            return f"https://www.congress.gov/bill/119th-congress/{bill_type}/{num}"
+    return f"https://www.congress.gov/search?q={bill_id}"
+
+
+def fetch_house_floor_xml(week_offset: int = 0) -> list[ScheduleEvent]:
     """Fetch House floor schedule from docs.house.gov XML feed."""
     events = []
-    monday = get_current_week_monday()
+    monday = get_current_week_monday(week_offset)
     week_str = monday.strftime("%Y%m%d")
 
     url = f"https://docs.house.gov/floor/Download.aspx?file=/billsthisweek/{week_str}/{week_str}.xml"
@@ -95,20 +152,14 @@ def fetch_house_floor_xml() -> list[ScheduleEvent]:
         resp.raise_for_status()
     except requests.RequestException as e:
         logger.error(f"Failed to fetch House floor XML: {e}")
-        # Try previous Monday if current week isn't available yet
-        prev_monday = monday - timedelta(days=7)
-        week_str = prev_monday.strftime("%Y%m%d")
-        url = f"https://docs.house.gov/floor/Download.aspx?file=/billsthisweek/{week_str}/{week_str}.xml"
-        try:
-            resp = requests.get(url, timeout=15)
-            resp.raise_for_status()
-        except requests.RequestException:
-            return events
+        _mark_source("House Floor (Clerk)", False, error=str(e))
+        return events
 
     try:
         root = ET.fromstring(resp.content)
     except ET.ParseError as e:
         logger.error(f"Failed to parse House floor XML: {e}")
+        _mark_source("House Floor (Clerk)", False, error="XML parse error")
         return events
 
     week_date_str = root.get("week-date", "")
@@ -117,21 +168,8 @@ def fetch_house_floor_xml() -> list[ScheduleEvent]:
     except ValueError:
         week_date = monday
 
-    # Categorize floor items by their category to assign approximate dates
-    # Suspension items typically happen Mon-Tue, rule items Wed-Thu
-    suspension_date = week_date  # Monday
-    rule_date = week_date + timedelta(days=2)  # Wednesday
-    today = date.today()
-
     for category in root.findall("category"):
         category_type = category.get("type", "Items")
-        # Assign approximate date based on category
-        if "suspension" in category_type.lower():
-            item_date = suspension_date
-        elif "rule" in category_type.lower() or "pursuant" in category_type.lower():
-            item_date = rule_date
-        else:
-            item_date = week_date
 
         for item in category.findall(".//floor-item"):
             if item.get("remove-date"):
@@ -144,21 +182,22 @@ def fetch_house_floor_xml() -> list[ScheduleEvent]:
                 continue
 
             title = f"{legis_num} - {floor_text}" if legis_num else floor_text
-            # Truncate very long floor text
             if len(title) > 200:
                 title = title[:197] + "..."
             bill_numbers = [legis_num] if legis_num else []
 
-            # Get document URLs for source linking
             doc_url = None
             for f in item.findall(".//file"):
                 doc_url = f.get("doc-url")
                 break
 
+            # All floor items go on the week start date with no time
+            # We don't assign specific days because the actual schedule
+            # depends on the Majority Leader's weekly plan
             event = ScheduleEvent(
                 title=title,
-                date=item_date,
-                time=None,  # Floor items don't have specific times
+                date=week_date,
+                time=None,  # Time TBD - depends on floor schedule
                 chamber="House",
                 event_type="floor",
                 description=f"Category: {category_type}",
@@ -169,11 +208,104 @@ def fetch_house_floor_xml() -> list[ScheduleEvent]:
             )
             events.append(event)
 
+    _mark_source("House Floor (Clerk)", True, count=len(events))
     logger.info(f"Fetched {len(events)} House floor items")
     return events
 
 
-def fetch_senate_hearings_xml() -> list[ScheduleEvent]:
+def fetch_senate_floor_schedule(week_offset: int = 0) -> list[ScheduleEvent]:
+    """Fetch Senate floor schedule from Senate Democrats site."""
+    events = []
+    url = "https://www.democrats.senate.gov/floor"
+    logger.info(f"Fetching Senate floor schedule: {url}")
+
+    try:
+        resp = requests.get(url, timeout=15, headers={
+            "User-Agent": "Capitol Week Congressional Schedule Aggregator"
+        })
+        resp.raise_for_status()
+        html = resp.text
+    except requests.RequestException as e:
+        logger.error(f"Failed to fetch Senate floor schedule: {e}")
+        _mark_source("Senate Floor", False, error=str(e))
+        return events
+
+    monday = get_current_week_monday(week_offset)
+
+    # Try to extract schedule text - the Senate Democrats page has
+    # the floor schedule in a relatively structured format
+    # Look for schedule content between common markers
+    # This is a best-effort parse of the HTML
+    import re as _re
+
+    # Extract the main content area
+    # Look for dates and associated text
+    date_pattern = r'(Monday|Tuesday|Wednesday|Thursday|Friday),?\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})'
+
+    matches = list(_re.finditer(date_pattern, html, _re.IGNORECASE))
+
+    if not matches:
+        logger.info("No dated entries found in Senate floor schedule")
+        _mark_source("Senate Floor", True, count=0)
+        return events
+
+    current_year = date.today().year
+    month_map = {
+        "january": 1, "february": 2, "march": 3, "april": 4,
+        "may": 5, "june": 6, "july": 7, "august": 8,
+        "september": 9, "october": 10, "november": 11, "december": 12,
+    }
+
+    for i, match in enumerate(matches):
+        day_name = match.group(1)
+        month_name = match.group(2).lower()
+        day_num = int(match.group(3))
+        month_num = month_map.get(month_name, 0)
+        if not month_num:
+            continue
+
+        try:
+            schedule_date = date(current_year, month_num, day_num)
+        except ValueError:
+            continue
+
+        # Only include this week
+        if schedule_date < monday or schedule_date > monday + timedelta(days=6):
+            continue
+
+        # Extract text between this match and the next
+        start_pos = match.end()
+        end_pos = matches[i + 1].start() if i + 1 < len(matches) else start_pos + 2000
+
+        # Strip HTML tags from the segment
+        segment = html[start_pos:end_pos]
+        segment = _re.sub(r'<[^>]+>', ' ', segment)
+        segment = _re.sub(r'\s+', ' ', segment).strip()
+
+        if not segment or len(segment) < 10:
+            continue
+
+        # Truncate for title
+        title_text = segment[:200] + "..." if len(segment) > 200 else segment
+
+        event = ScheduleEvent(
+            title=f"Senate Floor: {title_text}",
+            date=schedule_date,
+            time=None,
+            chamber="Senate",
+            event_type="floor",
+            description=segment[:1000],
+            source_url="https://www.democrats.senate.gov/floor",
+            source_name="Senate Democrats",
+        )
+        events.append(event)
+
+    _mark_source("Senate Floor", True, count=len(events))
+    logger.info(f"Fetched {len(events)} Senate floor events")
+    return events
+
+
+def fetch_senate_hearings_xml(week_offset: int = 0) -> list[ScheduleEvent]:
     """Fetch Senate committee hearings from senate.gov XML feed."""
     events = []
     url = "https://www.senate.gov/general/committee_schedules/hearings.xml"
@@ -184,16 +316,17 @@ def fetch_senate_hearings_xml() -> list[ScheduleEvent]:
         resp.raise_for_status()
     except requests.RequestException as e:
         logger.error(f"Failed to fetch Senate hearings XML: {e}")
+        _mark_source("Senate Hearings (XML)", False, error=str(e))
         return events
 
     try:
         root = ET.fromstring(resp.content)
     except ET.ParseError as e:
         logger.error(f"Failed to parse Senate hearings XML: {e}")
+        _mark_source("Senate Hearings (XML)", False, error="XML parse error")
         return events
 
-    today = date.today()
-    week_end = today + timedelta(days=(6 - today.weekday()))  # Sunday
+    monday = get_current_week_monday(week_offset)
 
     for meeting in root.findall("meeting"):
         date_str = meeting.findtext("date_iso_8601", "").strip()
@@ -205,8 +338,6 @@ def fetch_senate_hearings_xml() -> list[ScheduleEvent]:
         except ValueError:
             continue
 
-        # Only include this week's meetings
-        monday = get_current_week_monday()
         if meeting_date < monday or meeting_date > monday + timedelta(days=6):
             continue
 
@@ -216,7 +347,6 @@ def fetch_senate_hearings_xml() -> list[ScheduleEvent]:
         room = meeting.findtext("room", "").strip() or None
         matter = meeting.findtext("matter", "").strip() or None
 
-        # Extract bill numbers from associated documents
         bill_numbers = []
         docs_elem = meeting.find("Documents")
         if docs_elem is not None:
@@ -224,7 +354,6 @@ def fetch_senate_hearings_xml() -> list[ScheduleEvent]:
                 prefix = doc.get("document_prefix", "")
                 num = doc.get("document_num", "")
                 if prefix and num:
-                    # Convert prefix: SN -> S., HR -> H.R.
                     if prefix == "SN":
                         bill_numbers.append(f"S. {num}")
                     elif prefix == "HR":
@@ -234,12 +363,10 @@ def fetch_senate_hearings_xml() -> list[ScheduleEvent]:
                     else:
                         bill_numbers.append(f"{prefix} {num}")
 
-        # Build title
         display_committee = committee
         if subcommittee:
             display_committee = f"{committee} - {subcommittee}"
 
-        # Truncate matter for title if it's very long
         short_matter = matter
         if matter and len(matter) > 150:
             short_matter = matter[:147] + "..."
@@ -263,6 +390,7 @@ def fetch_senate_hearings_xml() -> list[ScheduleEvent]:
         )
         events.append(event)
 
+    _mark_source("Senate Hearings (XML)", True, count=len(events))
     logger.info(f"Fetched {len(events)} Senate hearing events")
     return events
 
@@ -297,7 +425,6 @@ def _parse_meeting_detail(detail: dict, monday: date, sunday: date) -> Optional[
 
     chamber = detail.get("chamber", "")
     title = detail.get("title", "Committee Meeting")
-    # Truncate very long titles (some API entries have full bill text as title)
     if len(title) > 200:
         title = title[:197] + "..."
     meeting_type = detail.get("type", "Meeting")
@@ -316,16 +443,8 @@ def _parse_meeting_detail(detail: dict, monday: date, sunday: date) -> Optional[
         room = location_data.get("room", "")
         location = f"{building}, Room {room}" if building and room else building or room
 
-    time_str = None
-    if meeting_dt.hour > 0:
-        et_hour = meeting_dt.hour - 4  # EDT approximation
-        if et_hour < 0:
-            et_hour += 24
-        am_pm = "AM" if et_hour < 12 else "PM"
-        display_hour = et_hour if et_hour <= 12 else et_hour - 12
-        if display_hour == 0:
-            display_hour = 12
-        time_str = f"{display_hour}:{meeting_dt.minute:02d} {am_pm}"
+    # Proper UTC to ET conversion
+    time_str = _format_et_time(meeting_dt)
 
     event_type = "hearing"
     if "markup" in meeting_type.lower():
@@ -354,13 +473,12 @@ def _parse_meeting_detail(detail: dict, monday: date, sunday: date) -> Optional[
     )
 
 
-def fetch_congress_api_meetings() -> list[ScheduleEvent]:
+def fetch_congress_api_meetings(week_offset: int = 0) -> list[ScheduleEvent]:
     """Fetch committee meetings from Congress.gov API using parallel requests."""
     events = []
-    monday = get_current_week_monday()
+    monday = get_current_week_monday(week_offset)
     sunday = monday + timedelta(days=6)
 
-    # Fetch the most recently updated meetings (top 50 should cover current week)
     url = (
         f"https://api.congress.gov/v3/committee-meeting"
         f"?api_key={CONGRESS_API_KEY}"
@@ -374,12 +492,12 @@ def fetch_congress_api_meetings() -> list[ScheduleEvent]:
         data = resp.json()
     except (requests.RequestException, json.JSONDecodeError) as e:
         logger.error(f"Failed to fetch Congress.gov API: {e}")
+        _mark_source("Congress.gov API", False, error=str(e))
         return events
 
     meetings = data.get("committeeMeetings", [])
     detail_urls = [m.get("url") for m in meetings if m.get("url")]
 
-    # Fetch details in parallel (max 10 concurrent)
     logger.info(f"Fetching {len(detail_urls)} meeting details in parallel")
     details = []
     with ThreadPoolExecutor(max_workers=10) as executor:
@@ -394,51 +512,49 @@ def fetch_congress_api_meetings() -> list[ScheduleEvent]:
         if event:
             events.append(event)
 
+    _mark_source("Congress.gov API", True, count=len(events))
     logger.info(f"Fetched {len(events)} Congress.gov API events (from {len(details)} details)")
     return events
 
 
-def _dedup_key(event: ScheduleEvent) -> str:
-    """Generate a dedup key for an event. Uses committee+date+time for committee events,
-    or title-based key for floor items."""
-    if event.event_type == "floor":
-        # Floor items: dedup on bill number + date
-        bill = event.bill_numbers[0] if event.bill_numbers else event.title[:40]
-        return f"floor|{event.date}|{bill.lower().strip()}"
-
-    # Committee events: match on date + time + committee name
-    committee_norm = re.sub(r'\s+', ' ', (event.committee or event.title[:40]).lower().strip())
-    # Remove common prefixes like "house " or "senate "
-    committee_norm = re.sub(r'^(house|senate)\s+', '', committee_norm)
-    # Normalize time: "04:00 PM" and "4:00 PM" should match
-    time_raw = (event.time or "").strip()
-    try:
-        t = datetime.strptime(time_raw, "%I:%M %p")
-        time_norm = t.strftime("%H:%M")
-    except ValueError:
+def _normalize_time(time_raw: str) -> str:
+    """Normalize time string for dedup comparison."""
+    time_raw = time_raw.strip()
+    for fmt in ("%I:%M %p", "%I:%M%p", "%-I:%M %p"):
         try:
-            t = datetime.strptime(time_raw, "%I:%M%p")
-            time_norm = t.strftime("%H:%M")
+            t = datetime.strptime(time_raw, fmt)
+            return t.strftime("%H:%M")
         except ValueError:
-            time_norm = time_raw.lower()
+            continue
+    return time_raw.lower()
+
+
+def _dedup_key(event: ScheduleEvent) -> str:
+    """Generate a dedup key for an event."""
+    if event.event_type == "floor":
+        bill = event.bill_numbers[0] if event.bill_numbers else event.title[:40]
+        return f"floor|{event.date}|{event.chamber}|{bill.lower().strip()}"
+
+    committee_norm = re.sub(r'\s+', ' ', (event.committee or event.title[:40]).lower().strip())
+    committee_norm = re.sub(r'^(house|senate)\s+', '', committee_norm)
+    time_norm = _normalize_time(event.time or "")
     return f"committee|{event.date}|{time_norm}|{committee_norm[:50]}"
 
 
-def fetch_all_events() -> list[ScheduleEvent]:
+def fetch_all_events(week_offset: int = 0) -> list[ScheduleEvent]:
     """Fetch events from all sources and return sorted, deduplicated list."""
+    global _source_status
+    _source_status = {}
     all_events = []
 
-    # Fetch from all sources
-    all_events.extend(fetch_house_floor_xml())
-    all_events.extend(fetch_senate_hearings_xml())
-    all_events.extend(fetch_congress_api_meetings())
+    all_events.extend(fetch_house_floor_xml(week_offset))
+    all_events.extend(fetch_senate_floor_schedule(week_offset))
+    all_events.extend(fetch_senate_hearings_xml(week_offset))
+    all_events.extend(fetch_congress_api_meetings(week_offset))
 
-    # Deduplicate: prefer Senate.gov for Senate hearings (better truncated titles),
-    # prefer Congress.gov for House meetings (has location data)
-    # Sort so preferred sources come first
     def source_priority(e):
         if e.chamber == "Senate" and e.source_name == "Senate.gov":
-            return 0  # Prefer Senate.gov for Senate events
+            return 0
         if e.source_name == "Congress.gov":
             return 1
         return 2
@@ -456,8 +572,8 @@ def fetch_all_events() -> list[ScheduleEvent]:
     return deduped
 
 
-def get_week_range():
-    """Return (monday, sunday) for the current week."""
-    monday = get_current_week_monday()
+def get_week_range(week_offset: int = 0):
+    """Return (monday, sunday) for the current (or offset) week."""
+    monday = get_current_week_monday(week_offset)
     sunday = monday + timedelta(days=6)
     return monday, sunday

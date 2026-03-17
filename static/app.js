@@ -1,10 +1,11 @@
-// Capitol Week - Client-side filtering and interactivity
+// Capitol Week - Client-side filtering, search, and interactivity
 
 document.addEventListener("DOMContentLoaded", function () {
     const state = {
         chamber: "",
         type: "",
         committee: "",
+        search: "",
     };
 
     // Filter buttons
@@ -31,6 +32,19 @@ document.addEventListener("DOMContentLoaded", function () {
         });
     }
 
+    // Search input
+    const searchInput = document.getElementById("search-filter");
+    if (searchInput) {
+        let debounceTimer;
+        searchInput.addEventListener("input", () => {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+                state.search = searchInput.value.toLowerCase().trim();
+                applyFilters();
+            }, 200);
+        });
+    }
+
     // Subscribe URL copy
     const copyBtn = document.getElementById("copy-subscribe");
     if (copyBtn) {
@@ -39,7 +53,6 @@ document.addEventListener("DOMContentLoaded", function () {
             navigator.clipboard.writeText(url).then(() => {
                 showToast("Subscription URL copied! Paste into your calendar app.");
             }).catch(() => {
-                // Fallback
                 prompt("Copy this subscription URL:", url);
             });
         });
@@ -52,8 +65,10 @@ document.addEventListener("DOMContentLoaded", function () {
             const matchType = !state.type || card.dataset.type === state.type;
             const matchCommittee = !state.committee ||
                 (card.dataset.committee && card.dataset.committee.toLowerCase().includes(state.committee.toLowerCase()));
+            const matchSearch = !state.search ||
+                (card.dataset.searchtext && card.dataset.searchtext.includes(state.search));
 
-            if (matchChamber && matchType && matchCommittee) {
+            if (matchChamber && matchType && matchCommittee && matchSearch) {
                 card.classList.remove("filtered-out");
             } else {
                 card.classList.add("filtered-out");
@@ -66,7 +81,6 @@ document.addEventListener("DOMContentLoaded", function () {
             const totalCards = section.querySelectorAll(".event-card");
             section.classList.toggle("filtered-empty", totalCards.length > 0 && visibleCards.length === 0);
 
-            // Update day count
             const countEl = section.querySelector(".day-count");
             if (countEl) {
                 const n = visibleCards.length;
@@ -74,7 +88,7 @@ document.addEventListener("DOMContentLoaded", function () {
             }
         });
 
-        // Update total count in header
+        // Update total count
         const totalVisible = document.querySelectorAll(".event-card:not(.filtered-out)").length;
         const countEl = document.querySelector(".event-count");
         if (countEl) {
@@ -87,6 +101,10 @@ document.addEventListener("DOMContentLoaded", function () {
         if (state.chamber) params.set("chamber", state.chamber);
         if (state.type) params.set("type", state.type);
         if (state.committee) params.set("committee", state.committee);
+
+        // Get week offset from the page
+        const weekParam = new URLSearchParams(window.location.search).get("week");
+        if (weekParam) params.set("week", weekParam);
 
         const qs = params.toString();
         const path = "/calendar.ics" + (qs ? "?" + qs : "");
@@ -111,11 +129,26 @@ document.addEventListener("DOMContentLoaded", function () {
         setTimeout(() => toast.classList.add("hidden"), 3000);
     }
 
-    // Scroll to today on load
+    // Scroll to today on load (only for current week)
     const todaySection = document.querySelector(".day-section.today");
     if (todaySection) {
         setTimeout(() => {
             todaySection.scrollIntoView({ behavior: "smooth", block: "start" });
         }, 300);
     }
+
+    // Keyboard shortcut: Escape clears search
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && searchInput) {
+            searchInput.value = "";
+            state.search = "";
+            applyFilters();
+            searchInput.blur();
+        }
+        // "/" focuses search
+        if (e.key === "/" && document.activeElement !== searchInput) {
+            e.preventDefault();
+            searchInput.focus();
+        }
+    });
 });

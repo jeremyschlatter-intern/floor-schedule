@@ -4,6 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Capitol Week - Congressional Schedule</title>
+    <meta name="description" content="Unified view of House and Senate floor schedules and committee hearings for the week, with iCal export.">
+    <meta property="og:title" content="Capitol Week - Congressional Schedule">
+    <meta property="og:description" content="Unified House & Senate floor and committee schedule with iCal export">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏛</text></svg>">
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -14,12 +18,27 @@
                 <p class="subtitle">Unified Congressional Floor &amp; Committee Schedule</p>
             </div>
             <div class="header-meta">
-                <span class="week-label">{{ week_label }}</span>
+                <div class="week-nav">
+                    <a href="?week={{ week_offset - 1 }}" class="week-nav-btn" title="Previous week">&larr;</a>
+                    <span class="week-label">{{ week_label }}</span>
+                    <a href="?week={{ week_offset + 1 }}" class="week-nav-btn" title="Next week">&rarr;</a>
+                    {% if week_offset != 0 %}
+                    <a href="/" class="week-nav-today">This Week</a>
+                    {% endif %}
+                </div>
                 <span class="event-count">{{ total_events }} events</span>
                 <span class="last-updated">Updated {{ last_updated }} ET</span>
             </div>
         </div>
     </header>
+
+    {% if session_info %}
+    <div class="session-banner">
+        {% for chamber, msg in session_info.items() %}
+        <div class="session-notice">{{ msg }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
 
     <nav class="toolbar">
         <div class="filters">
@@ -50,9 +69,13 @@
                     {% endfor %}
                 </select>
             </div>
+            <div class="filter-group search-group">
+                <label>Search</label>
+                <input type="text" id="search-filter" placeholder="Bill, topic, or committee..." autocomplete="off">
+            </div>
         </div>
         <div class="actions">
-            <a href="/calendar.ics" class="btn btn-primary" id="ical-download" title="Download iCal for current view">
+            <a href="/calendar.ics{% if week_offset %}?week={{ week_offset }}{% endif %}" class="btn btn-primary" id="ical-download" title="Download iCal for current view">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M4.5 1a.5.5 0 0 1 .5.5V2h6v-.5a.5.5 0 0 1 1 0V2h1a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h1v-.5a.5.5 0 0 1 .5-.5zM3 3a1 1 0 0 0-1 1v1h12V4a1 1 0 0 0-1-1H3zm-1 3v7a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V6H2z"/></svg>
                 Download .ics
             </a>
@@ -74,10 +97,7 @@
                     </h2>
                     <div class="day-actions">
                         <span class="day-count" data-day="{{ day.date }}">{{ day.events|length }} events</span>
-                        <a href="/calendar/{{ day.date }}.ics" class="btn-sm" title="Download this day's schedule">
-                            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/><path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z"/></svg>
-                            .ics
-                        </a>
+                        <a href="/calendar/{{ day.date }}.ics" class="btn-sm" title="Download this day's schedule">.ics</a>
                     </div>
                 </div>
 
@@ -87,12 +107,13 @@
                     <div class="event-card {{ event.chamber|lower }} {{ event.event_type }}"
                          data-chamber="{{ event.chamber }}"
                          data-type="{{ event.event_type }}"
-                         data-committee="{{ event.committee or '' }}">
+                         data-committee="{{ event.committee or '' }}"
+                         data-searchtext="{{ event.title|lower }} {{ (event.description or '')|lower }} {{ event.bill_numbers|join(' ')|lower }} {{ (event.committee or '')|lower }}">
                         <div class="event-time">
                             {% if event.time %}
                                 {{ event.time }}
                             {% else %}
-                                <span class="all-day">All Day</span>
+                                <span class="time-tbd">Time TBD</span>
                             {% endif %}
                         </div>
                         <div class="event-body">
@@ -110,8 +131,7 @@
                             {% if event.bill_numbers %}
                             <div class="event-bills">
                                 {% for bill in event.bill_numbers[:5] %}
-                                <a href="https://www.congress.gov/bill/119th-congress/{{ 'senate-bill' if bill.startswith('S.') else 'house-bill' }}/{{ bill.split(' ')[-1] }}"
-                                   class="bill-link" target="_blank" rel="noopener">{{ bill }}</a>
+                                <a href="{{ bill|bill_url }}" class="bill-link" target="_blank" rel="noopener">{{ bill }}</a>
                                 {% endfor %}
                                 {% if event.bill_numbers|length > 5 %}
                                 <span class="more-bills">+{{ event.bill_numbers|length - 5 }} more</span>
@@ -141,11 +161,21 @@
 
     <footer>
         <div class="footer-content">
+            <div class="source-status">
+                <strong>Data sources:</strong>
+                {% for name, status in source_status.items() %}
+                <span class="source-indicator {{ 'ok' if status.ok else 'error' }}" title="{{ status.error if status.error else (status.count|string + ' items') }}">
+                    {% if status.ok %}&#10003;{% else %}&#10007;{% endif %} {{ name }}
+                    {% if status.ok %}({{ status.count }}){% endif %}
+                </span>
+                {% endfor %}
+            </div>
             <p>Data from <a href="https://docs.house.gov/floor/" target="_blank">House Clerk</a>,
-               <a href="https://www.senate.gov/committees/hearings_meetings.htm" target="_blank">Senate.gov</a>, and
+               <a href="https://www.senate.gov/committees/hearings_meetings.htm" target="_blank">Senate.gov</a>,
+               <a href="https://www.democrats.senate.gov/floor" target="_blank">Senate Democrats</a>, and
                <a href="https://www.congress.gov/committee-schedule" target="_blank">Congress.gov</a>.
                All data is in the public domain.</p>
-            <p class="footer-note">Capitol Week aggregates official congressional schedule data. Schedules are subject to change.</p>
+            <p class="footer-note">Capitol Week aggregates official congressional schedule data. Schedules are subject to change. Times shown in Eastern.</p>
         </div>
     </footer>
 

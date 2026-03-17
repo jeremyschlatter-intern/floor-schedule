@@ -82,6 +82,103 @@ header {
     font-size: 0.8rem;
 }
 
+/* Week Navigation */
+.week-nav {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.week-nav-btn {
+    color: white;
+    text-decoration: none;
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    background: rgba(255,255,255,0.15);
+    font-size: 0.9rem;
+    transition: background 0.15s;
+}
+
+.week-nav-btn:hover {
+    background: rgba(255,255,255,0.3);
+}
+
+.week-nav-today {
+    color: white;
+    text-decoration: none;
+    font-size: 0.75rem;
+    padding: 0.15rem 0.5rem;
+    border: 1px solid rgba(255,255,255,0.4);
+    border-radius: 10px;
+    margin-left: 0.25rem;
+}
+
+.week-nav-today:hover {
+    background: rgba(255,255,255,0.2);
+}
+
+/* Session Banner */
+.session-banner {
+    background: #fff3cd;
+    border-bottom: 1px solid #ffc107;
+    padding: 0.5rem 1.5rem;
+    text-align: center;
+}
+
+.session-notice {
+    font-size: 0.85rem;
+    color: #856404;
+    font-weight: 500;
+}
+
+/* Source Status */
+.source-status {
+    margin-bottom: 0.75rem;
+    display: flex;
+    gap: 0.75rem;
+    justify-content: center;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.source-indicator {
+    font-size: 0.75rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+}
+
+.source-indicator.ok {
+    color: #2e7d32;
+    background: #e8f5e9;
+}
+
+.source-indicator.error {
+    color: #c62828;
+    background: #ffebee;
+}
+
+/* Search */
+.search-group {
+    flex-grow: 1;
+    max-width: 300px;
+}
+
+#search-filter {
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 0.8rem;
+    width: 100%;
+    background: white;
+    font-family: inherit;
+}
+
+#search-filter:focus {
+    outline: none;
+    border-color: var(--house-blue);
+    box-shadow: 0 0 0 2px rgba(0,51,102,0.1);
+}
+
 /* Toolbar */
 .toolbar {
     background: var(--card-bg);
@@ -320,8 +417,8 @@ main {
     background: rgba(0,0,0,0.02);
 }
 
-.all-day {
-    font-size: 0.7rem;
+.all-day, .time-tbd {
+    font-size: 0.65rem;
     text-transform: uppercase;
     letter-spacing: 0.5px;
     opacity: 0.7;

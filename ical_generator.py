@@ -37,7 +37,7 @@ def create_calendar(events: list[ScheduleEvent], cal_name: str = "Capitol Week")
         if sched_event.time:
             dt_start = ET.localize(sched_event.datetime_start)
             ical_event.add("dtstart", dt_start)
-            ical_event.add("dtend", dt_start + timedelta(hours=2))  # Default 2hr duration
+            ical_event.add("dtend", dt_start + timedelta(hours=1))  # Default 1hr duration
         else:
             ical_event.add("dtstart", sched_event.date)
             ical_event.add("dtend", sched_event.date + timedelta(days=1))

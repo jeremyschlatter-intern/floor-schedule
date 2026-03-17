@@ -7,7 +7,10 @@ import logging
 import time
 from datetime import date, datetime, timedelta
 from flask import Flask, render_template, request, Response, jsonify
-from fetchers import fetch_all_events, get_week_range, ScheduleEvent
+from fetchers import (
+    fetch_all_events, get_week_range, get_source_status, get_current_week_monday,
+    ScheduleEvent, _bill_url,
+)
 from ical_generator import create_calendar, calendar_to_bytes, filter_events
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s")
@@ -15,32 +18,44 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Simple in-memory cache
-_cache = {"events": [], "fetched_at": 0, "ttl": 1800}  # 30 min TTL
+# Cache per week_offset
+_cache = {}
+CACHE_TTL = 1800  # 30 min
 
 
-def get_events() -> list[ScheduleEvent]:
-    """Get events with caching."""
+def get_events(week_offset: int = 0) -> list[ScheduleEvent]:
+    """Get events with caching, keyed by week offset."""
     now = time.time()
-    if now - _cache["fetched_at"] < _cache["ttl"] and _cache["events"]:
-        return _cache["events"]
+    entry = _cache.get(week_offset)
+    if entry and now - entry["fetched_at"] < CACHE_TTL and entry["events"]:
+        return entry["events"]
 
-    logger.info("Refreshing event data from all sources...")
-    events = fetch_all_events()
-    _cache["events"] = events
-    _cache["fetched_at"] = now
+    logger.info(f"Refreshing event data (week_offset={week_offset})...")
+    events = fetch_all_events(week_offset)
+    _cache[week_offset] = {"events": events, "fetched_at": now}
     return events
+
+
+@app.template_filter("bill_url")
+def bill_url_filter(bill_id):
+    """Jinja filter for generating bill URLs."""
+    return _bill_url(bill_id)
 
 
 @app.route("/")
 def index():
     """Main page - unified schedule view."""
-    events = get_events()
-    monday, sunday = get_week_range()
+    week_offset = request.args.get("week", 0, type=int)
+    # Clamp to reasonable range
+    week_offset = max(-4, min(4, week_offset))
+
+    events = get_events(week_offset)
+    monday, sunday = get_week_range(week_offset)
+    source_status = get_source_status()
 
     # Group events by date
     days = []
-    for i in range(7):
+    for i in range(5):  # Mon-Fri only (hide empty weekends)
         day = monday + timedelta(days=i)
         day_events = [e for e in events if e.date == day]
         days.append({
@@ -51,12 +66,41 @@ def index():
             "events": [e.to_dict() for e in day_events],
         })
 
-    # Collect unique committees and types for filters
+    # Check for weekend events
+    for i in range(5, 7):
+        day = monday + timedelta(days=i)
+        day_events = [e for e in events if e.date == day]
+        if day_events:  # Only show weekends if they have events
+            days.append({
+                "date": day,
+                "date_str": day.strftime("%A, %B %d"),
+                "date_short": day.strftime("%a %m/%d"),
+                "is_today": day == date.today(),
+                "events": [e.to_dict() for e in day_events],
+            })
+
+    # Also include events that land on the monday (week-of items)
+    # These are already included in the Monday entry
+
     committees = sorted(set(e.committee for e in events if e.committee))
     event_types = sorted(set(e.event_type for e in events))
 
     week_label = f"{monday.strftime('%B %d')} - {sunday.strftime('%B %d, %Y')}"
-    last_updated = datetime.fromtimestamp(_cache["fetched_at"]).strftime("%I:%M %p") if _cache["fetched_at"] else "Never"
+    cache_entry = _cache.get(week_offset, {})
+    last_updated = (
+        datetime.fromtimestamp(cache_entry.get("fetched_at", 0)).strftime("%I:%M %p")
+        if cache_entry.get("fetched_at")
+        else "Never"
+    )
+
+    # Check session status
+    house_floor_count = sum(1 for e in events if e.chamber == "House" and e.event_type == "floor")
+    senate_floor_count = sum(1 for e in events if e.chamber == "Senate" and e.event_type == "floor")
+    session_info = {}
+    if house_floor_count == 0:
+        session_info["house"] = "No House floor activity scheduled this week"
+    if senate_floor_count == 0:
+        session_info["senate"] = "No Senate floor activity scheduled this week"
 
     return render_template(
         "index.html",
@@ -66,13 +110,17 @@ def index():
         week_label=week_label,
         last_updated=last_updated,
         total_events=len(events),
+        week_offset=week_offset,
+        source_status=source_status,
+        session_info=session_info,
     )
 
 
 @app.route("/api/events")
 def api_events():
     """JSON API for events."""
-    events = get_events()
+    week_offset = request.args.get("week", 0, type=int)
+    events = get_events(week_offset)
     chamber = request.args.get("chamber")
     event_type = request.args.get("type")
     committee = request.args.get("committee")
@@ -84,7 +132,8 @@ def api_events():
 @app.route("/calendar.ics")
 def ical_feed():
     """iCal feed - full week schedule."""
-    events = get_events()
+    week_offset = request.args.get("week", 0, type=int)
+    events = get_events(week_offset)
     chamber = request.args.get("chamber")
     event_type = request.args.get("type")
     committee = request.args.get("committee")
@@ -100,11 +149,15 @@ def ical_feed():
         cal_name += f" - {committee}"
 
     cal = create_calendar(filtered, cal_name)
-    return Response(
+    resp = Response(
         calendar_to_bytes(cal),
         mimetype="text/calendar",
-        headers={"Content-Disposition": f"attachment; filename=capitol-week.ics"},
+        headers={
+            "Content-Disposition": "attachment; filename=capitol-week.ics",
+            "Cache-Control": "public, max-age=900",  # 15 min cache for calendar apps
+        },
     )
+    return resp
 
 
 @app.route("/calendar/<date_str>.ics")
@@ -121,7 +174,10 @@ def ical_day(date_str):
     return Response(
         calendar_to_bytes(cal),
         mimetype="text/calendar",
-        headers={"Content-Disposition": f"attachment; filename=capitol-week-{date_str}.ics"},
+        headers={
+            "Content-Disposition": f"attachment; filename=capitol-week-{date_str}.ics",
+            "Cache-Control": "public, max-age=900",
+        },
     )
 
 

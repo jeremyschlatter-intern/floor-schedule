@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Capitol Week - Congressional Schedule</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header>
+        <div class="header-content">
+            <div class="branding">
+                <h1>Capitol Week</h1>
+                <p class="subtitle">Unified Congressional Floor &amp; Committee Schedule</p>
+            </div>
+            <div class="header-meta">
+                <span class="week-label">{{ week_label }}</span>
+                <span class="event-count">{{ total_events }} events</span>
+                <span class="last-updated">Updated {{ last_updated }} ET</span>
+            </div>
+        </div>
+    </header>
+
+    <nav class="toolbar">
+        <div class="filters">
+            <div class="filter-group">
+                <label>Chamber</label>
+                <div class="btn-group" data-filter="chamber">
+                    <button class="filter-btn active" data-value="">All</button>
+                    <button class="filter-btn house" data-value="House">House</button>
+                    <button class="filter-btn senate" data-value="Senate">Senate</button>
+                </div>
+            </div>
+            <div class="filter-group">
+                <label>Type</label>
+                <div class="btn-group" data-filter="type">
+                    <button class="filter-btn active" data-value="">All</button>
+                    <button class="filter-btn" data-value="floor">Floor</button>
+                    <button class="filter-btn" data-value="hearing">Hearing</button>
+                    <button class="filter-btn" data-value="markup">Markup</button>
+                    <button class="filter-btn" data-value="meeting">Meeting</button>
+                </div>
+            </div>
+            <div class="filter-group">
+                <label>Committee</label>
+                <select id="committee-filter">
+                    <option value="">All Committees</option>
+                    {% for c in committees %}
+                    <option value="{{ c }}">{{ c }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <div class="actions">
+            <a href="/calendar.ics" class="btn btn-primary" id="ical-download" title="Download iCal for current view">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M4.5 1a.5.5 0 0 1 .5.5V2h6v-.5a.5.5 0 0 1 1 0V2h1a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h1v-.5a.5.5 0 0 1 .5-.5zM3 3a1 1 0 0 0-1 1v1h12V4a1 1 0 0 0-1-1H3zm-1 3v7a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V6H2z"/></svg>
+                Download .ics
+            </a>
+            <button class="btn btn-secondary" id="copy-subscribe" title="Copy iCal subscription URL">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1z"/><path d="M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5h3z"/></svg>
+                Subscribe URL
+            </button>
+        </div>
+    </nav>
+
+    <main>
+        <div class="schedule" id="schedule">
+            {% for day in days %}
+            <div class="day-section {% if day.is_today %}today{% endif %}" data-date="{{ day.date }}">
+                <div class="day-header">
+                    <h2>
+                        {{ day.date_str }}
+                        {% if day.is_today %}<span class="today-badge">Today</span>{% endif %}
+                    </h2>
+                    <div class="day-actions">
+                        <span class="day-count" data-day="{{ day.date }}">{{ day.events|length }} events</span>
+                        <a href="/calendar/{{ day.date }}.ics" class="btn-sm" title="Download this day's schedule">
+                            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/><path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z"/></svg>
+                            .ics
+                        </a>
+                    </div>
+                </div>
+
+                {% if day.events %}
+                <div class="events-list">
+                    {% for event in day.events %}
+                    <div class="event-card {{ event.chamber|lower }} {{ event.event_type }}"
+                         data-chamber="{{ event.chamber }}"
+                         data-type="{{ event.event_type }}"
+                         data-committee="{{ event.committee or '' }}">
+                        <div class="event-time">
+                            {% if event.time %}
+                                {{ event.time }}
+                            {% else %}
+                                <span class="all-day">All Day</span>
+                            {% endif %}
+                        </div>
+                        <div class="event-body">
+                            <div class="event-tags">
+                                <span class="tag chamber-tag {{ event.chamber|lower }}">{{ event.chamber }}</span>
+                                <span class="tag type-tag {{ event.event_type }}">{{ event.event_type|title }}</span>
+                                {% if event.committee %}
+                                <span class="tag committee-tag">{{ event.committee }}</span>
+                                {% endif %}
+                            </div>
+                            <h3 class="event-title">{{ event.title }}</h3>
+                            {% if event.location %}
+                            <div class="event-location">{{ event.location }}</div>
+                            {% endif %}
+                            {% if event.bill_numbers %}
+                            <div class="event-bills">
+                                {% for bill in event.bill_numbers[:5] %}
+                                <a href="https://www.congress.gov/bill/119th-congress/{{ 'senate-bill' if bill.startswith('S.') else 'house-bill' }}/{{ bill.split(' ')[-1] }}"
+                                   class="bill-link" target="_blank" rel="noopener">{{ bill }}</a>
+                                {% endfor %}
+                                {% if event.bill_numbers|length > 5 %}
+                                <span class="more-bills">+{{ event.bill_numbers|length - 5 }} more</span>
+                                {% endif %}
+                            </div>
+                            {% endif %}
+                            {% if event.description and event.event_type != 'floor' %}
+                            <details class="event-details">
+                                <summary>Details</summary>
+                                <p>{{ event.description }}</p>
+                            </details>
+                            {% endif %}
+                            <div class="event-source">
+                                <a href="{{ event.source_url }}" target="_blank" rel="noopener">{{ event.source_name }}</a>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="no-events">No scheduled events</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </main>
+
+    <footer>
+        <div class="footer-content">
+            <p>Data from <a href="https://docs.house.gov/floor/" target="_blank">House Clerk</a>,
+               <a href="https://www.senate.gov/committees/hearings_meetings.htm" target="_blank">Senate.gov</a>, and
+               <a href="https://www.congress.gov/committee-schedule" target="_blank">Congress.gov</a>.
+               All data is in the public domain.</p>
+            <p class="footer-note">Capitol Week aggregates official congressional schedule data. Schedules are subject to change.</p>
+        </div>
+    </footer>
+
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

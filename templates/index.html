@@ -104,7 +104,7 @@
                     <div class="floor-card-tags">
                         <span class="tag chamber-tag {{ event.chamber|lower }}">{{ event.chamber }}</span>
                         <span class="tag type-tag floor">Floor</span>
-                        {% if event.description %}
+                        {% if event.description and event.description.startswith('Category: ') %}
                         <span class="tag category-tag">{{ event.description|replace('Category: ', '') }}</span>
                         {% endif %}
                     </div>
@@ -118,6 +118,12 @@
                         <span class="more-bills">+{{ event.bill_numbers|length - 3 }} more</span>
                         {% endif %}
                     </div>
+                    {% endif %}
+                    {% if event.description and not event.description.startswith('Category: ') %}
+                    <details class="event-details">
+                        <summary>Schedule details</summary>
+                        <p>{{ event.description }}</p>
+                    </details>
                     {% endif %}
                     <div class="event-source">
                         <a href="{{ event.source_url }}" target="_blank" rel="noopener">{{ event.source_name }}</a>

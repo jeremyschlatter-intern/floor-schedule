@@ -306,11 +306,20 @@ def fetch_senate_floor_schedule(week_offset: int = 0) -> list[ScheduleEvent]:
         if not segment or len(segment) < 10:
             continue
 
-        # Truncate for title
+        # Create a concise title from the schedule text
+        # Try to extract the key action (e.g. "convene at 3:00pm", "resume consideration of...")
         title_text = segment[:200] + "..." if len(segment) > 200 else segment
+        # Clean up the title - extract the first meaningful sentence
+        sentences = _re.split(r'(?<=[.!])\s+', title_text)
+        if sentences:
+            # Use the first sentence, capped at 150 chars
+            first = sentences[0].strip()
+            if len(first) > 150:
+                first = first[:147] + "..."
+            title_text = first
 
         event = ScheduleEvent(
-            title=title_text,
+            title=f"Senate Floor - {day_name}, {match.group(2)} {day_num}",
             date=schedule_date,
             time=None,
             chamber="Senate",

@@ -53,11 +53,15 @@ def index():
     monday, sunday = get_week_range(week_offset)
     source_status = get_source_status()
 
-    # Group events by date
+    # Separate week-of items (floor schedule) from daily items
+    floor_items = [e.to_dict() for e in events if e.week_of]
+    daily_events = [e for e in events if not e.week_of]
+
+    # Group daily events by date
     days = []
-    for i in range(5):  # Mon-Fri only (hide empty weekends)
+    for i in range(5):  # Mon-Fri
         day = monday + timedelta(days=i)
-        day_events = [e for e in events if e.date == day]
+        day_events = [e for e in daily_events if e.date == day]
         days.append({
             "date": day,
             "date_str": day.strftime("%A, %B %d"),
@@ -66,11 +70,11 @@ def index():
             "events": [e.to_dict() for e in day_events],
         })
 
-    # Check for weekend events
+    # Show weekends only if they have events
     for i in range(5, 7):
         day = monday + timedelta(days=i)
-        day_events = [e for e in events if e.date == day]
-        if day_events:  # Only show weekends if they have events
+        day_events = [e for e in daily_events if e.date == day]
+        if day_events:
             days.append({
                 "date": day,
                 "date_str": day.strftime("%A, %B %d"),
@@ -78,9 +82,6 @@ def index():
                 "is_today": day == date.today(),
                 "events": [e.to_dict() for e in day_events],
             })
-
-    # Also include events that land on the monday (week-of items)
-    # These are already included in the Monday entry
 
     committees = sorted(set(e.committee for e in events if e.committee))
     event_types = sorted(set(e.event_type for e in events))
@@ -105,6 +106,7 @@ def index():
     return render_template(
         "index.html",
         days=days,
+        floor_items=floor_items,
         committees=committees,
         event_types=event_types,
         week_label=week_label,

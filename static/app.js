@@ -49,7 +49,7 @@ document.addEventListener("DOMContentLoaded", function () {
     const copyBtn = document.getElementById("copy-subscribe");
     if (copyBtn) {
         copyBtn.addEventListener("click", () => {
-            const url = buildIcalUrl(true);
+            const url = buildIcalUrl(true, true);
             navigator.clipboard.writeText(url).then(() => {
                 showToast("Subscription URL copied! Paste into your calendar app.");
             }).catch(() => {
@@ -59,6 +59,7 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     function applyFilters() {
+        // Filter daily event cards
         const cards = document.querySelectorAll(".event-card");
         cards.forEach(card => {
             const matchChamber = !state.chamber || card.dataset.chamber === state.chamber;
@@ -75,6 +76,33 @@ document.addEventListener("DOMContentLoaded", function () {
             }
         });
 
+        // Filter floor cards in the "This Week on the Floor" section
+        const floorCards = document.querySelectorAll(".floor-card");
+        let visibleFloorCards = 0;
+        floorCards.forEach(card => {
+            const matchChamber = !state.chamber || card.dataset.chamber === state.chamber;
+            const matchType = !state.type || card.dataset.type === state.type;
+            const matchSearch = !state.search ||
+                (card.dataset.searchtext && card.dataset.searchtext.includes(state.search));
+
+            if (matchChamber && matchType && matchSearch) {
+                card.classList.remove("filtered-out");
+                visibleFloorCards++;
+            } else {
+                card.classList.add("filtered-out");
+            }
+        });
+
+        // Toggle floor section visibility
+        const floorSection = document.getElementById("floor-items");
+        if (floorSection) {
+            floorSection.classList.toggle("filtered-empty", floorCards.length > 0 && visibleFloorCards === 0);
+            const floorCountEl = floorSection.querySelector(".floor-count");
+            if (floorCountEl) {
+                floorCountEl.textContent = `${visibleFloorCards} bill${visibleFloorCards !== 1 ? "s" : ""}`;
+            }
+        }
+
         // Update day sections
         document.querySelectorAll(".day-section").forEach(section => {
             const visibleCards = section.querySelectorAll(".event-card:not(.filtered-out)");
@@ -88,23 +116,26 @@ document.addEventListener("DOMContentLoaded", function () {
             }
         });
 
-        // Update total count
-        const totalVisible = document.querySelectorAll(".event-card:not(.filtered-out)").length;
+        // Update total count (daily events + floor items)
+        const totalVisible = document.querySelectorAll(".event-card:not(.filtered-out)").length + visibleFloorCards;
         const countEl = document.querySelector(".event-count");
         if (countEl) {
             countEl.textContent = `${totalVisible} events`;
         }
     }
 
-    function buildIcalUrl(absolute) {
+    function buildIcalUrl(absolute, forSubscription) {
         const params = new URLSearchParams();
         if (state.chamber) params.set("chamber", state.chamber);
         if (state.type) params.set("type", state.type);
         if (state.committee) params.set("committee", state.committee);
 
-        // Get week offset from the page
-        const weekParam = new URLSearchParams(window.location.search).get("week");
-        if (weekParam) params.set("week", weekParam);
+        // Only include week param for downloads, not subscriptions
+        // Subscriptions should always return current week
+        if (!forSubscription) {
+            const weekParam = new URLSearchParams(window.location.search).get("week");
+            if (weekParam) params.set("week", weekParam);
+        }
 
         const qs = params.toString();
         const path = "/calendar.ics" + (qs ? "?" + qs : "");

@@ -87,6 +87,47 @@
     </nav>
 
     <main>
+        {% if floor_items %}
+        <div class="floor-section" id="floor-items">
+            <div class="floor-header">
+                <h2>This Week on the Floor</h2>
+                <span class="floor-count">{{ floor_items|length }} bills</span>
+            </div>
+            <p class="floor-note">Scheduled for floor action this week. Specific days and times are determined by leadership and announced daily.</p>
+            <div class="floor-grid">
+                {% for event in floor_items %}
+                <div class="floor-card {{ event.chamber|lower }}"
+                     data-chamber="{{ event.chamber }}"
+                     data-type="{{ event.event_type }}"
+                     data-committee=""
+                     data-searchtext="{{ event.title|lower }} {{ event.bill_numbers|join(' ')|lower }}">
+                    <div class="floor-card-tags">
+                        <span class="tag chamber-tag {{ event.chamber|lower }}">{{ event.chamber }}</span>
+                        <span class="tag type-tag floor">Floor</span>
+                        {% if event.description %}
+                        <span class="tag category-tag">{{ event.description|replace('Category: ', '') }}</span>
+                        {% endif %}
+                    </div>
+                    <h3 class="floor-card-title">{{ event.title }}</h3>
+                    {% if event.bill_numbers %}
+                    <div class="event-bills">
+                        {% for bill in event.bill_numbers[:3] %}
+                        <a href="{{ bill|bill_url }}" class="bill-link" target="_blank" rel="noopener">{{ bill }}</a>
+                        {% endfor %}
+                        {% if event.bill_numbers|length > 3 %}
+                        <span class="more-bills">+{{ event.bill_numbers|length - 3 }} more</span>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                    <div class="event-source">
+                        <a href="{{ event.source_url }}" target="_blank" rel="noopener">{{ event.source_name }}</a>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
         <div class="schedule" id="schedule">
             {% for day in days %}
             <div class="day-section {% if day.is_today %}today{% endif %}" data-date="{{ day.date }}">

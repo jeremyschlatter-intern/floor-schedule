@@ -316,6 +316,114 @@ header {
     color: var(--text);
 }
 
+/* Floor Section - "This Week on the Floor" */
+.floor-section {
+    margin-bottom: 2rem;
+}
+
+.floor-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.35rem;
+}
+
+.floor-header h2 {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: var(--floor-gold);
+}
+
+.floor-count {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    background: var(--floor-gold-light);
+    padding: 0.15rem 0.6rem;
+    border-radius: 10px;
+    border: 1px solid var(--floor-gold);
+    font-weight: 600;
+}
+
+.floor-note {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.75rem;
+    font-style: italic;
+}
+
+.floor-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 0.65rem;
+}
+
+.floor-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.75rem;
+    transition: box-shadow 0.15s, transform 0.1s;
+}
+
+.floor-card:hover {
+    box-shadow: var(--shadow-hover);
+    transform: translateY(-1px);
+}
+
+.floor-card.house {
+    border-left: 4px solid var(--house-blue);
+}
+
+.floor-card.senate {
+    border-left: 4px solid var(--senate-red);
+}
+
+.floor-card-tags {
+    display: flex;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.4rem;
+}
+
+.floor-card-title {
+    font-size: 0.85rem;
+    font-weight: 500;
+    line-height: 1.35;
+    margin-bottom: 0.3rem;
+}
+
+.category-tag {
+    background: var(--floor-gold-light);
+    color: var(--floor-gold);
+    border: 1px solid var(--floor-gold);
+}
+
+.floor-card .event-bills {
+    margin: 0.3rem 0;
+}
+
+.floor-card .event-source {
+    margin-top: 0.35rem;
+}
+
+.floor-card.filtered-out {
+    display: none;
+}
+
+.floor-section.filtered-empty .floor-grid {
+    display: none;
+}
+
+.floor-section.filtered-empty::after {
+    content: "No matching floor items";
+    display: block;
+    padding: 1rem;
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    font-style: italic;
+}
+
 /* Main Schedule */
 main {
     max-width: 1200px;
@@ -661,6 +769,10 @@ footer {
 
     main {
         padding: 0.75rem;
+    }
+
+    .floor-grid {
+        grid-template-columns: 1fr;
     }
 
     .branding h1 {

@@ -40,6 +40,7 @@ class ScheduleEvent:
     source_url: Optional[str] = None
     source_name: Optional[str] = None
     event_id: Optional[str] = None
+    week_of: bool = False  # True for items that span the whole week (no specific day)
 
     @property
     def sort_key(self):
@@ -78,6 +79,7 @@ class ScheduleEvent:
             "source_url": self.source_url,
             "source_name": self.source_name,
             "event_id": self.event_id,
+            "week_of": self.week_of,
         }
 
 
@@ -191,17 +193,18 @@ def fetch_house_floor_xml(week_offset: int = 0) -> list[ScheduleEvent]:
                 doc_url = f.get("doc-url")
                 break
 
-            # All floor items go on the week start date with no time
-            # We don't assign specific days because the actual schedule
-            # depends on the Majority Leader's weekly plan
+            # Floor items span the entire week - the exact day/time depends
+            # on the Majority Leader's weekly plan. We mark them week_of=True
+            # and display them in a separate "This Week on the Floor" section.
             event = ScheduleEvent(
                 title=title,
                 date=week_date,
-                time=None,  # Time TBD - depends on floor schedule
+                time=None,
                 chamber="House",
                 event_type="floor",
                 description=f"Category: {category_type}",
                 bill_numbers=bill_numbers,
+                week_of=True,
                 source_url=doc_url or "https://docs.house.gov/floor/",
                 source_name="House Clerk",
                 event_id=item.get("id"),
@@ -277,10 +280,16 @@ def fetch_senate_floor_schedule(week_offset: int = 0) -> list[ScheduleEvent]:
         start_pos = match.end()
         end_pos = matches[i + 1].start() if i + 1 < len(matches) else start_pos + 2000
 
-        # Strip HTML tags from the segment
+        # Strip HTML tags and clean up the text
         segment = html[start_pos:end_pos]
         segment = _re.sub(r'<[^>]+>', ' ', segment)
+        # Decode HTML entities
+        import html as html_module
+        segment = html_module.unescape(segment)
+        # Clean whitespace
         segment = _re.sub(r'\s+', ' ', segment).strip()
+        # Remove common boilerplate
+        segment = _re.sub(r'^\s*[,.:;]\s*', '', segment)
 
         if not segment or len(segment) < 10:
             continue
@@ -295,6 +304,7 @@ def fetch_senate_floor_schedule(week_offset: int = 0) -> list[ScheduleEvent]:
             chamber="Senate",
             event_type="floor",
             description=segment[:1000],
+            week_of=True,
             source_url="https://www.democrats.senate.gov/floor",
             source_name="Senate Democrats",
         )
@@ -348,6 +358,7 @@ def fetch_senate_hearings_xml(week_offset: int = 0) -> list[ScheduleEvent]:
         matter = meeting.findtext("matter", "").strip() or None
 
         bill_numbers = []
+        seen_bills = set()
         docs_elem = meeting.find("Documents")
         if docs_elem is not None:
             for doc in docs_elem.findall("AssociatedDocument"):
@@ -355,13 +366,16 @@ def fetch_senate_hearings_xml(week_offset: int = 0) -> list[ScheduleEvent]:
                 num = doc.get("document_num", "")
                 if prefix and num:
                     if prefix == "SN":
-                        bill_numbers.append(f"S. {num}")
+                        bill_id = f"S. {num}"
                     elif prefix == "HR":
-                        bill_numbers.append(f"H.R. {num}")
+                        bill_id = f"H.R. {num}"
                     elif prefix == "PN":
-                        bill_numbers.append(f"PN {num}")
+                        bill_id = f"PN {num}"
                     else:
-                        bill_numbers.append(f"{prefix} {num}")
+                        bill_id = f"{prefix} {num}"
+                    if bill_id not in seen_bills:
+                        seen_bills.add(bill_id)
+                        bill_numbers.append(bill_id)
 
         display_committee = committee
         if subcommittee:
@@ -441,7 +455,10 @@ def _parse_meeting_detail(detail: dict, monday: date, sunday: date) -> Optional[
     if location_data:
         building = location_data.get("building", "")
         room = location_data.get("room", "")
-        location = f"{building}, Room {room}" if building and room else building or room
+        # Skip redacted/placeholder room numbers (e.g. "----------")
+        if room and re.match(r'^[-]+$', room.strip()):
+            room = ""
+        location = f"{building}, Room {room}" if building and room else building or room or None
 
     # Proper UTC to ET conversion
     time_str = _format_et_time(meeting_dt)
@@ -479,12 +496,16 @@ def fetch_congress_api_meetings(week_offset: int = 0) -> list[ScheduleEvent]:
     monday = get_current_week_monday(week_offset)
     sunday = monday + timedelta(days=6)
 
+    # Use date filtering to get only this week's meetings
+    from_dt = monday.strftime("%Y-%m-%dT00:00:00Z")
+    to_dt = (sunday + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
     url = (
         f"https://api.congress.gov/v3/committee-meeting"
         f"?api_key={CONGRESS_API_KEY}"
-        f"&limit=50&format=json"
+        f"&fromDateTime={from_dt}&toDateTime={to_dt}"
+        f"&limit=250&format=json"
     )
-    logger.info("Fetching Congress.gov API meeting list")
+    logger.info(f"Fetching Congress.gov API meetings for {monday} to {sunday}")
 
     try:
         resp = requests.get(url, timeout=20)

@@ -196,13 +196,25 @@ def fetch_house_floor_xml(week_offset: int = 0) -> list[ScheduleEvent]:
             # Floor items span the entire week - the exact day/time depends
             # on the Majority Leader's weekly plan. We mark them week_of=True
             # and display them in a separate "This Week on the Floor" section.
+            # Map verbose category labels to shorter display names
+            category_lower = category_type.lower()
+            category_short = category_type
+            if "suspension" in category_lower:
+                category_short = "Suspension"
+            elif "pursuant to a rule" in category_lower:
+                category_short = "Pursuant to Rule"
+            elif "special order" in category_lower:
+                category_short = "Special Order"
+            elif "may be considered" in category_lower:
+                category_short = "May Be Considered"
+
             event = ScheduleEvent(
                 title=title,
                 date=week_date,
                 time=None,
                 chamber="House",
                 event_type="floor",
-                description=f"Category: {category_type}",
+                description=f"Category: {category_short}",
                 bill_numbers=bill_numbers,
                 week_of=True,
                 source_url=doc_url or "https://docs.house.gov/floor/",
@@ -298,7 +310,7 @@ def fetch_senate_floor_schedule(week_offset: int = 0) -> list[ScheduleEvent]:
         title_text = segment[:200] + "..." if len(segment) > 200 else segment
 
         event = ScheduleEvent(
-            title=f"Senate Floor: {title_text}",
+            title=title_text,
             date=schedule_date,
             time=None,
             chamber="Senate",
@@ -444,8 +456,7 @@ def _parse_meeting_detail(detail: dict, monday: date, sunday: date) -> Optional[
     meeting_type = detail.get("type", "Meeting")
     status = detail.get("meetingStatus", "")
 
-    if status.lower() in ("cancelled", "postponed"):
-        return None
+    is_cancelled = status.lower() in ("cancelled", "postponed")
 
     committees = detail.get("committees", [])
     committee_name = committees[0].get("name", "") if committees else ""
@@ -469,11 +480,24 @@ def _parse_meeting_detail(detail: dict, monday: date, sunday: date) -> Optional[
     elif "meeting" in meeting_type.lower():
         event_type = "meeting"
 
+    # Override: if the title strongly suggests it's a hearing, classify it as such
+    title_lower = title.lower()
+    if event_type == "meeting" and any(
+        pattern in title_lower for pattern in
+        ["hearings to examine", "hearing to examine", "hearing on", "hearing -",
+         "confirmation hearing", "nomination of", "threats assessment hearing"]
+    ):
+        event_type = "hearing"
+
     event_id = detail.get("eventId", "")
     congress_url = (
         f"https://www.congress.gov/event/119th-congress/{chamber.lower()}-event/{event_id}"
         if event_id else None
     )
+
+    # Prepend cancelled/postponed status to title
+    if is_cancelled:
+        title = f"[{status.upper()}] {title}"
 
     return ScheduleEvent(
         title=title,
@@ -550,16 +574,50 @@ def _normalize_time(time_raw: str) -> str:
     return time_raw.lower()
 
 
+def _normalize_committee(name: str) -> str:
+    """Normalize committee name for dedup comparison."""
+    name = re.sub(r'\s+', ' ', name.lower().strip())
+    # Remove chamber prefix
+    name = re.sub(r'^(house|senate)\s+', '', name)
+    # Remove "subcommittee on..." suffix for broader matching
+    name = re.sub(r'\s*subcommittee\s+on\s+.*$', '', name)
+    # Remove "committee on" prefix
+    name = re.sub(r'^committee\s+on\s+', '', name)
+    return name.strip()
+
+
 def _dedup_key(event: ScheduleEvent) -> str:
     """Generate a dedup key for an event."""
     if event.event_type == "floor":
         bill = event.bill_numbers[0] if event.bill_numbers else event.title[:40]
         return f"floor|{event.date}|{event.chamber}|{bill.lower().strip()}"
 
-    committee_norm = re.sub(r'\s+', ' ', (event.committee or event.title[:40]).lower().strip())
-    committee_norm = re.sub(r'^(house|senate)\s+', '', committee_norm)
+    committee_norm = _normalize_committee(event.committee or event.title[:40])
     time_norm = _normalize_time(event.time or "")
-    return f"committee|{event.date}|{time_norm}|{committee_norm[:50]}"
+    return f"committee|{event.date}|{time_norm}|{event.chamber}|{committee_norm[:50]}"
+
+
+def _is_duplicate(event: ScheduleEvent, seen_keys: set, seen_events: list) -> bool:
+    """Check if event is a duplicate, using both exact key match and fuzzy matching."""
+    key = _dedup_key(event)
+    if key in seen_keys:
+        return True
+
+    # Fuzzy match: same date + time + chamber but different committee normalization
+    if event.time:
+        time_norm = _normalize_time(event.time)
+        committee_norm = _normalize_committee(event.committee or "")
+        for existing in seen_events:
+            if (existing.date == event.date
+                    and existing.chamber == event.chamber
+                    and existing.time
+                    and _normalize_time(existing.time) == time_norm):
+                existing_comm = _normalize_committee(existing.committee or "")
+                # Check if one committee name contains the other
+                if (committee_norm and existing_comm
+                        and (committee_norm in existing_comm or existing_comm in committee_norm)):
+                    return True
+    return False
 
 
 def fetch_all_events(week_offset: int = 0) -> list[ScheduleEvent]:
@@ -580,12 +638,11 @@ def fetch_all_events(week_offset: int = 0) -> list[ScheduleEvent]:
             return 1
         return 2
 
-    seen = set()
+    seen_keys = set()
     deduped = []
     for event in sorted(all_events, key=source_priority):
-        key = _dedup_key(event)
-        if key not in seen:
-            seen.add(key)
+        if not _is_duplicate(event, seen_keys, deduped):
+            seen_keys.add(_dedup_key(event))
             deduped.append(event)
 
     deduped.sort(key=lambda e: e.sort_key)

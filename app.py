@@ -20,7 +20,7 @@ app = Flask(__name__)
 
 # Cache per week_offset
 _cache = {}
-CACHE_TTL = 1800  # 30 min
+CACHE_TTL = 600  # 10 min
 
 
 def get_events(week_offset: int = 0) -> list[ScheduleEvent]:

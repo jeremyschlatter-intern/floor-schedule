@@ -165,7 +165,15 @@
                                 <span class="tag committee-tag">{{ event.committee }}</span>
                                 {% endif %}
                             </div>
-                            <h3 class="event-title">{{ event.title }}</h3>
+                            <h3 class="event-title{% if event.title.startswith('[CANCELLED]') or event.title.startswith('[POSTPONED]') %} event-title-cancelled{% endif %}">
+                                {% if event.title.startswith('[CANCELLED]') %}
+                                <span class="cancelled-badge">Cancelled</span>{{ event.title[12:] }}
+                                {% elif event.title.startswith('[POSTPONED]') %}
+                                <span class="cancelled-badge" style="background:#e67e22">Postponed</span>{{ event.title[12:] }}
+                                {% else %}
+                                {{ event.title }}
+                                {% endif %}
+                            </h3>
                             {% if event.location %}
                             <div class="event-location">{{ event.location }}</div>
                             {% endif %}

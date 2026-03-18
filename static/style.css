@@ -780,6 +780,25 @@ footer {
     }
 }
 
+/* Cancelled/postponed events */
+.event-title-cancelled {
+    text-decoration: line-through;
+    opacity: 0.6;
+}
+
+.cancelled-badge {
+    display: inline-block;
+    background: #dc3545;
+    color: white;
+    font-size: 0.6rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+    text-transform: uppercase;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    margin-right: 0.3rem;
+}
+
 /* Hidden class for filtered events */
 .event-card.filtered-out {
     display: none;

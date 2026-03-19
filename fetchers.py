@@ -19,7 +19,7 @@ import pytz
 logger = logging.getLogger(__name__)
 
 CONGRESS_API_KEY = os.environ.get(
-    "CONGRESS_API_KEY", "CONGRESS_API_KEY"
+    "CONGRESS_API_KEY", "DEMO_KEY"
 )
 ET_TZ = pytz.timezone("America/New_York")
 
